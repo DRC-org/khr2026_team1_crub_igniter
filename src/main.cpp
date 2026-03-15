@@ -19,17 +19,27 @@ constexpr uint32_t kHealthResponseCanId = 0x000;
 constexpr uint8_t kHealthCheckCmd = 0xFF;
 constexpr uint8_t kHealthResponseId = 0x32;
 constexpr float kPwmFrequencyHz = 30000.0f;
-constexpr uint32_t kHeartbeatIntervalMs = 1000;
+constexpr float kMaxDutyPercent = 95.0f;
+constexpr unsigned long kSirenCycleMs = 1200;
+constexpr unsigned long kBreatheCycleMs = 2000;
 
 PwmOut g_mosfet0(kMosfet0PwmPin);
 PwmOut g_mosfet1(kMosfet1PwmPin);
 
 Adafruit_NeoPixel strip(1, kRgbPin, NEO_GRB + NEO_KHZ800);
 
-uint32_t g_last_heartbeat_ms = 0;
-bool g_heartbeat_on = false;
 bool g_mosfet0_on = false;
 bool g_mosfet1_on = false;
+
+float triangle_wave(unsigned long now_ms, unsigned long cycle_ms,
+                    unsigned long phase_offset_ms) {
+  const unsigned long phase = (now_ms + phase_offset_ms) % cycle_ms;
+  const unsigned long half_cycle = cycle_ms / 2;
+  if (phase < half_cycle) {
+    return static_cast<float>(phase) / static_cast<float>(half_cycle);
+  }
+  return static_cast<float>(cycle_ms - phase) / static_cast<float>(half_cycle);
+}
 
 }  // namespace
 
@@ -87,7 +97,6 @@ void loop() {
           Serial.println("MOSFET 0 OFF");
           break;
         case 0x01:
-          g_mosfet0.pulse_perc(100.0f);
           g_mosfet0_on = true;
           Serial.println("MOSFET 0 ON");
           break;
@@ -97,7 +106,6 @@ void loop() {
           Serial.println("MOSFET 1 OFF");
           break;
         case 0x11:
-          g_mosfet1.pulse_perc(100.0f);
           g_mosfet1_on = true;
           Serial.println("MOSFET 1 ON");
           break;
@@ -118,12 +126,22 @@ void loop() {
     }
   }
 
-  uint32_t now = millis();
-  if (now - g_last_heartbeat_ms >= kHeartbeatIntervalMs) {
-    g_last_heartbeat_ms = now;
-    g_heartbeat_on = !g_heartbeat_on;
-    strip.setPixelColor(
-        0, g_heartbeat_on ? strip.Color(0, 255, 0) : strip.Color(0, 0, 0));
-    strip.show();
-  }
+  const unsigned long now_ms = millis();
+
+  const float duty0 =
+      g_mosfet0_on ? kMaxDutyPercent * triangle_wave(now_ms, kSirenCycleMs, 0)
+                   : 0.0f;
+  const float duty1 =
+      g_mosfet1_on ? kMaxDutyPercent *
+                         triangle_wave(now_ms, kSirenCycleMs, kSirenCycleMs / 2)
+                   : 0.0f;
+  digitalWrite(kMosfet0DirPin, LOW);
+  g_mosfet0.pulse_perc(duty0);
+  digitalWrite(kMosfet1DirPin, LOW);
+  g_mosfet1.pulse_perc(duty1);
+
+  const uint8_t green =
+      static_cast<uint8_t>(255.0f * triangle_wave(now_ms, kBreatheCycleMs, 0));
+  strip.setPixelColor(0, strip.Color(0, green, 0));
+  strip.show();
 }
